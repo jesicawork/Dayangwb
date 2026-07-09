@@ -382,6 +382,15 @@
   }
   .profile-card:hover{ transform:translateY(-2px); box-shadow:var(--shadow); border-color:var(--lavender-deep); }
   .profile-card .pc-name{ font-weight:700; font-size:15px; }
+  .profile-card .pc-top-row{ display:flex; justify-content:space-between; align-items:flex-start; gap:8px; }
+  .status-badge{
+    flex-shrink:0; font-size:10px; font-weight:800; padding:2px 9px; border-radius:99px;
+    white-space:nowrap;
+  }
+  .status-badge.status-active{ background:#DCEFE2; color:#3D8461; }
+  .status-badge.status-new{ background:var(--yellow-bg); color:#9A7C1B; }
+  .status-badge.status-transfer{ background:#E4DBFA; color:var(--lavender-deep); }
+  .status-badge.status-left{ background:#F3E4E2; color:var(--danger); }
   .profile-card .pc-meta{ font-size:12px; color:var(--ink-soft); }
   .profile-card .pc-phone{ font-size:12px; color:var(--ink); }
   .profile-card .pc-note{ font-size:11px; color:#9A7C1B; background:var(--yellow-bg); padding:3px 8px; border-radius:6px; margin-top:2px; }
@@ -640,12 +649,27 @@ const state = {
   profileSelectMode: false,
   selectedStudentIds: [],
   profileUnlocked: false,
+  profileStatusFilter: '全部',
   loaded: false
 };
 
 const GRADE_ORDER = ['高一','高二','高三','專一','專二','專三','專四','專五'];
 const ALL_ID = '__all__';
 const STUDENT_PROFILE_PASSWORD = '29646498';
+const ENROLL_STATUS_OPTIONS = ['在班','新生','轉出','退班'];
+
+function generateStudentNo(){
+  const year = new Date().getFullYear();
+  const countThisYear = state.students.filter(s => s.studentNo && s.studentNo.startsWith(String(year))).length;
+  return `${year}${String(countThisYear + 1).padStart(3,'0')}`;
+}
+function enrollStatusClass(status){
+  if(status === '在班') return 'status-active';
+  if(status === '新生') return 'status-new';
+  if(status === '轉出') return 'status-transfer';
+  if(status === '退班') return 'status-left';
+  return 'status-active';
+}
 function todayLabel(){
   const d = new Date();
   const week = ['日','一','二','三','四','五','六'];
@@ -1006,8 +1030,10 @@ function renderProfileLockScreen(){
 
 function renderStudentProfiles(){
   const q = state.studentSearch.trim().toLowerCase();
+  const statusFilter = state.profileStatusFilter || '全部';
   const students = state.students.filter(s =>
-    !q || s.zh.toLowerCase().includes(q) || (s.en||'').toLowerCase().includes(q) || (s.school||'').toLowerCase().includes(q)
+    (!q || s.zh.toLowerCase().includes(q) || (s.en||'').toLowerCase().includes(q) || (s.school||'').toLowerCase().includes(q))
+    && (statusFilter === '全部' || (s.enrollStatus||'在班') === statusFilter)
   );
   const groups = GRADE_ORDER.map(g => ({ grade: g, list: students.filter(s => s.grade === g) })).filter(g => g.list.length);
   const otherGrades = [...new Set(students.map(s=>s.grade).filter(g=>!GRADE_ORDER.includes(g)))];
@@ -1038,6 +1064,9 @@ function renderStudentProfiles(){
     ` : `<p class="helper-note" style="margin-top:8px;">💡 匯入時系統會先讀取標題列自動辨識每欄對應的欄位（就算欄位順序跟範本不同也沒關係）；每個欄位的內容也會做基本檢查，例如電話欄若不是像電話的內容、學校欄若看起來像電話號碼，都會自動留空、不會存錯地方，並在完成後提醒您有幾筆需要自行補齊。另外也會用「手機號碼」或「姓名+生日」偵測重複資料並略過。可先按「匯出學生名冊」取得標準範本欄位。</p>`}
     <div class="toolbar" style="margin-top:14px;">
       <input type="text" id="student-search" placeholder="搜尋姓名或學校…" value="${escapeHtml(state.studentSearch)}">
+      <select id="profile-status-filter" style="padding:9px 12px;border-radius:10px;border:1px solid var(--lavender-line);background:var(--lavender-bg);font-size:13px;">
+        ${['全部', ...ENROLL_STATUS_OPTIONS].map(o=>`<option ${statusFilter===o?'selected':''}>${o}</option>`).join('')}
+      </select>
     </div>
     ${groups.length ? groups.map(grp => `
       <div class="profile-grade-block">
@@ -1045,10 +1074,15 @@ function renderStudentProfiles(){
         <div class="profile-card-grid">
           ${grp.list.map(s => {
             const isSelected = state.selectedStudentIds.includes(s.id);
+            const status = s.enrollStatus || '在班';
             return `
             <div class="profile-card ${selectMode ? 'selectable' : ''} ${isSelected ? 'selected' : ''}" data-open-student="${s.id}" role="button" tabindex="0">
               ${selectMode ? `<span class="pc-check">${isSelected ? '✅' : '⬜'}</span>` : ''}
-              <div class="pc-name">${escapeHtml(studentFullName(s))}</div>
+              <div class="pc-top-row">
+                <div class="pc-name">${escapeHtml(studentFullName(s))}</div>
+                <span class="status-badge ${enrollStatusClass(status)}">${escapeHtml(status)}</span>
+              </div>
+              ${s.studentNo ? `<div class="pc-meta">🔖 ${escapeHtml(s.studentNo)}</div>` : ''}
               <div class="pc-meta">${escapeHtml(s.school||'未填寫學校')}${s.track ? '・' + escapeHtml(s.track) : ''}</div>
               ${s.birthday ? `<div class="pc-meta">🎂 ${escapeHtml(s.birthday)}</div>` : ''}
               <div class="pc-phone">📱 ${escapeHtml(s.phone||'—')}</div>
@@ -1308,6 +1342,22 @@ function openStudentModal(studentId){
     <h3>${editing ? '編輯學生資料' : '新增學生'}</h3>
     <p class="sub">${editing ? '修改後按「儲存」即可更新檔案' : '建立學生基本資料'}</p>
     <div class="field-row">
+      <div class="field">
+        <label>學生編號</label>
+        <div style="display:flex; gap:6px;">
+          <input type="text" id="s-studentno" value="${editing ? escapeHtml(s.studentNo||'') : ''}" placeholder="按右側按鈕自動產生" style="flex:1;">
+          <button type="button" class="btn ghost small" id="s-gen-no" style="white-space:nowrap;">自動產生</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>在班狀態</label>
+        <select id="s-enroll-status">
+          ${ENROLL_STATUS_OPTIONS.map(o=>`<option ${editing ? (s.enrollStatus===o?'selected':'') : (o==='新生'?'selected':'')}>${o}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="field"><label>狀態異動日期</label><input type="date" id="s-enroll-date" value="${editing ? escapeHtml(s.enrollStatusDate||'') : new Date().toISOString().slice(0,10)}"></div>
+    <div class="field-row">
       <div class="field"><label>中文姓名 *</label><input type="text" id="s-zh" value="${editing ? escapeHtml(s.zh) : ''}"></div>
       <div class="field"><label>英文姓名</label><input type="text" id="s-en" value="${editing ? escapeHtml(s.en||'') : ''}"></div>
     </div>
@@ -1338,6 +1388,9 @@ function openStudentModal(studentId){
       <button class="btn" id="student-save">${editing ? '儲存' : '新增學生'}</button>
     </div>
   `);
+  document.getElementById('s-gen-no').addEventListener('click', ()=>{
+    document.getElementById('s-studentno').value = generateStudentNo();
+  });
   document.getElementById('student-cancel').onclick = closeModal;
   if(editing){
     document.getElementById('student-delete').onclick = ()=>{
@@ -1366,7 +1419,10 @@ function openStudentModal(studentId){
       birthday: document.getElementById('s-birthday').value,
       phone: document.getElementById('s-phone').value.trim(),
       parentPhone: document.getElementById('s-parent-phone').value.trim(),
-      note: document.getElementById('s-note').value.trim()
+      note: document.getElementById('s-note').value.trim(),
+      studentNo: document.getElementById('s-studentno').value.trim() || generateStudentNo(),
+      enrollStatus: document.getElementById('s-enroll-status').value,
+      enrollStatusDate: document.getElementById('s-enroll-date').value
     };
     const dup = findDuplicateStudent(fields, editing ? studentId : null);
     const proceedSave = async ()=>{
@@ -1447,11 +1503,11 @@ async function setStudentNote(studentId, note){
 /* ============ student roster CSV (full profile, with dedupe) ============ */
 function exportStudentRosterCsv(){
   const rows = [];
-  rows.push(['中文姓名','英文姓名','就讀學校','就讀管道','就讀年級','生日','學生電話','家長電話','備註']);
+  rows.push(['學生編號','在班狀態','狀態異動日期','中文姓名','英文姓名','就讀學校','就讀管道','就讀年級','生日','學生電話','家長電話','備註']);
   const order = GRADE_ORDER.concat([...new Set(state.students.map(s=>s.grade).filter(g=>!GRADE_ORDER.includes(g)))]);
   order.forEach(grade=>{
     state.students.filter(s=>s.grade===grade).forEach(s=>{
-      rows.push([s.zh, s.en||'', s.school||'', s.track||'', s.grade||'', s.birthday||'', s.phone||'', s.parentPhone||'', s.note||'']);
+      rows.push([s.studentNo||'', s.enrollStatus||'在班', s.enrollStatusDate||'', s.zh, s.en||'', s.school||'', s.track||'', s.grade||'', s.birthday||'', s.phone||'', s.parentPhone||'', s.note||'']);
     });
   });
   const csv = '\uFEFF' + rows.map(r => r.map(csvField).join(',')).join('\r\n');
@@ -1468,6 +1524,9 @@ function exportStudentRosterCsv(){
 
 /* ---------- field-type sanity checks for CSV import ---------- */
 const FIELD_SYNONYMS = {
+  studentNo: ['學生編號','編號','學號'],
+  enrollStatus: ['在班狀態','狀態','就讀狀態'],
+  enrollStatusDate: ['狀態異動日期','異動日期','狀態日期'],
   zh: ['中文姓名','姓名','學生姓名','中文名'],
   en: ['英文姓名','英文名','英文'],
   school: ['就讀學校','學校','就讀之學校'],
@@ -1532,7 +1591,7 @@ async function importStudentRosterCsv(file){
   let colMap = mapCsvHeaderToFields(headerRow);
   if(Object.keys(colMap).length < 3){
     // 標題列無法辨識，改用預設欄位順序（跟「匯出學生名冊」的格式一致）
-    colMap = { 0:'zh', 1:'en', 2:'school', 3:'track', 4:'grade', 5:'birthday', 6:'phone', 7:'parentPhone', 8:'note' };
+    colMap = { 0:'studentNo', 1:'enrollStatus', 2:'enrollStatusDate', 3:'zh', 4:'en', 5:'school', 6:'track', 7:'grade', 8:'birthday', 9:'phone', 10:'parentPhone', 11:'note' };
   }
 
   let added = 0, skippedDup = 0, skippedNoName = 0, blankedFields = 0;
@@ -1546,6 +1605,13 @@ async function importStudentRosterCsv(file){
     if(!raw.zh || looksLikePhoneText(raw.zh)){ skippedNoName++; continue; }
 
     const candidate = { zh: raw.zh };
+
+    candidate.studentNo = raw.studentNo || generateStudentNo();
+
+    candidate.enrollStatus = ENROLL_STATUS_OPTIONS.includes(raw.enrollStatus) ? raw.enrollStatus : '在班';
+    if(raw.enrollStatus && candidate.enrollStatus !== raw.enrollStatus) blankedFields++;
+
+    candidate.enrollStatusDate = looksLikeDateText(raw.enrollStatusDate) ? normalizeDateText(raw.enrollStatusDate) : '';
 
     candidate.en = (raw.en && !looksLikePhoneText(raw.en)) ? raw.en : '';
     if(raw.en && !candidate.en) blankedFields++;
@@ -2022,6 +2088,11 @@ function bindViewEvents(){
     document.getElementById('student-search').focus();
     const val = document.getElementById('student-search');
     val.selectionStart = val.selectionEnd = val.value.length;
+  });
+  const statusFilterSelect = document.getElementById('profile-status-filter');
+  if(statusFilterSelect) statusFilterSelect.addEventListener('change', (e)=>{
+    state.profileStatusFilter = e.target.value;
+    render();
   });
   document.querySelectorAll('[data-action="delete-student"]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
