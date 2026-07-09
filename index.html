@@ -516,6 +516,15 @@
 /* ============ backend: local (this browser) or cloud (Google Apps Script) ============ */
 const LOCAL_PREFIX = 'dyzw_';
 const GAS_URL_KEY = 'dyzw_gas_url';
+
+/**
+ * 把您部署好的 Apps Script 網址（結尾 /exec）填在下面雙引號中間，
+ * 例如：const DEFAULT_GAS_URL = 'https://script.google.com/macros/s/AKfycb.../exec';
+ * 填好、存檔、上傳到 GitHub 後，任何人打開這個網站都會自動連到
+ * 同一個共用後台，完全不用再手動設定「⚙️ 同步設定」這一步。
+ * 留空 '' 則預設為每台裝置各自的本機模式，仍可在網頁裡手動設定。
+ */
+const DEFAULT_GAS_URL = 'https://script.google.com/macros/s/AKfycbyAvOsJzamjnyIs1_FlytDiUkm5TaG4rpb_7BXBUSXOsgUbxxyiV3ycPzKEuxU3pVaJiA/exec';
 const Backend = {
   gasUrl: '',
   cache: null, // 雲端模式下，開頁時一次讀回來的完整資料
@@ -523,7 +532,7 @@ const Backend = {
 };
 
 async function initBackend(){
-  Backend.gasUrl = localStorage.getItem(GAS_URL_KEY) || '';
+  Backend.gasUrl = localStorage.getItem(GAS_URL_KEY) || DEFAULT_GAS_URL;
   if(!Backend.gasUrl){
     Backend.cloudReady = false;
     return;
@@ -1701,12 +1710,12 @@ function openSettingsModal(){
   openModal(`
     <h3>雲端硬碟同步設定</h3>
     ${statusHtml}
-    <p class="sub">貼上你部署好的 Google Apps Script 網頁應用程式網址，即可把所有資料（學生、點名、試卷、影片檔案）改成存在你的 Google 試算表／雲端硬碟，多台裝置、多位老師都能看到同一份資料。</p>
+    <p class="sub">貼上你部署好的 Google Apps Script 網頁應用程式網址，即可把所有資料（學生、點名、試卷、影片檔案）改成存在你的 Google 試算表／雲端硬碟，多台裝置、多位老師都能看到同一份資料。${DEFAULT_GAS_URL ? '這個網頁已經內建了共用後台網址，一般情況下不用手動設定這一步。' : ''}</p>
     <div class="field">
       <label>Apps Script 網頁應用程式網址</label>
       <input type="url" id="gas-url" placeholder="https://script.google.com/macros/s/.../exec" value="${escapeHtml(Backend.gasUrl||'')}">
     </div>
-    <p class="sub" style="margin-top:-6px;">留空並儲存＝改回本機模式（資料只留在這台裝置）。第一次連上雲端時，會直接讀取雲端現有的資料，本機原本的資料不會自動搬過去。</p>
+    <p class="sub" style="margin-top:-6px;">留空並儲存＝${DEFAULT_GAS_URL ? '改回使用網頁內建的共用後台網址' : '改回本機模式（資料只留在這台裝置）'}。第一次連上雲端時，會直接讀取雲端現有的資料，本機原本的資料不會自動搬過去。</p>
     <div class="modal-actions" style="flex-wrap:wrap;">
       <button class="btn ghost" id="settings-reset" style="margin-right:auto;">清除全部資料</button>
       <button class="btn ghost" id="settings-cancel">取消</button>
