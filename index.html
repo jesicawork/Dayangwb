@@ -272,14 +272,24 @@
   .folder-overview h4{ margin:0 0 10px; font-size:13px; letter-spacing:1px; color:var(--ink-soft); font-weight:700; }
   .folder-card-grid{ display:grid; grid-template-columns:repeat(auto-fill, minmax(150px,1fr)); gap:12px; }
   .folder-card{
-    display:flex; flex-direction:column; align-items:flex-start; gap:4px;
+    display:flex; flex-direction:column; gap:0;
     background:var(--paper); border:1.5px solid var(--lavender-line); border-radius:12px;
-    padding:14px; text-align:left; transition:transform .15s ease, box-shadow .15s ease;
+    overflow:hidden; transition:transform .15s ease, box-shadow .15s ease;
   }
   .folder-card:hover{ transform:translateY(-2px); box-shadow:var(--shadow); border-color:var(--lavender-deep); }
+  .folder-card-nav{
+    display:flex; flex-direction:column; align-items:flex-start; gap:4px;
+    padding:14px 14px 10px; text-align:left; background:none; width:100%;
+  }
   .folder-card .ic{ font-size:20px; }
   .folder-card .name{ font-weight:700; font-size:14px; }
   .folder-card .count{ font-size:11px; color:var(--ink-soft); }
+  .folder-card-actions{
+    display:flex; justify-content:flex-end; gap:4px; padding:6px 10px;
+    border-top:1px solid var(--lavender-line); background:rgba(155,127,199,0.05);
+  }
+  .folder-card-actions .del{ border:none; background:none; color:var(--ink-soft); font-size:13px; padding:2px 5px; }
+  .folder-card-actions .del:hover{ color:var(--danger); }
 
   .folder-chip{
     display:inline-block; font-size:10px; font-weight:700; color:var(--lavender-deep);
@@ -865,6 +875,7 @@ function renderFolderList(kind){
     <div class="folder-item ${f.id === activeId ? 'active' : ''}" data-folder="${f.id}" data-kind="${kind}">
       <span class="name" data-action="select-folder">📁 ${escapeHtml(f.name)}</span>
       <button class="del" data-action="rename-folder" title="修改資料夾名稱">✏️</button>
+      <button class="del" data-action="move-folder" title="移動資料夾">📂</button>
       <button class="del" data-action="delete-folder" title="刪除資料夾">✕</button>
     </div>
   `).join('');
@@ -900,11 +911,18 @@ function renderFolderOverview(kind, parentId){
         ${children.map(f => {
           const childCount = getChildFolders(kind, f.id).length;
           return `
-          <button class="folder-card" data-goto-folder="${f.id}" data-kind="${kind}">
-            <span class="ic">📁</span>
-            <span class="name">${escapeHtml(f.name)}</span>
-            <span class="count">${(bucket[f.id]||[]).length} 份${childCount ? '・' + childCount + ' 個子資料夾' : ''}</span>
-          </button>
+          <div class="folder-card">
+            <button class="folder-card-nav" data-goto-folder="${f.id}" data-kind="${kind}">
+              <span class="ic">📁</span>
+              <span class="name">${escapeHtml(f.name)}</span>
+              <span class="count">${(bucket[f.id]||[]).length} 份${childCount ? '・' + childCount + ' 個子資料夾' : ''}</span>
+            </button>
+            <div class="folder-card-actions">
+              <button class="del" data-action="rename-folder-card" data-folder="${f.id}" data-kind="${kind}" title="修改名稱">✏️</button>
+              <button class="del" data-action="move-folder" data-folder="${f.id}" data-kind="${kind}" title="移動資料夾">📂</button>
+              <button class="del" data-action="delete-folder-card" data-folder="${f.id}" data-kind="${kind}" title="刪除">✕</button>
+            </div>
+          </div>
         `;
         }).join('')}
       </div>
@@ -1452,6 +1470,43 @@ async function moveFileOrder(kind, folderId, fileId, direction){
   else if(kind === 'videos') await storageSet('videos', state.videos);
   else await storageSet('attendance-files', state.attendanceFiles);
   render();
+}
+
+function promptMoveFolder(kind, folderId){
+  const data = kind === 'papers' ? state.papers : state.videos;
+  const folder = data.folders.find(f=>f.id===folderId);
+  if(!folder) return;
+  const blocked = new Set([folderId, ...getDescendantFolderIds(kind, folderId)]);
+  const currentParent = folder.parentId || ALL_ID;
+  const allLabel = kind === 'papers' ? '全部試卷（頂層）' : '全部影片（頂層）';
+  const options = [
+    { id: ALL_ID, name: allLabel },
+    ...data.folders.filter(f => !blocked.has(f.id)).map(f => ({ id: f.id, name: getFolderPath(kind, f.id).map(p=>p.name).join(' / ') }))
+  ].filter(o => o.id !== currentParent);
+  if(!options.length){ showToast('沒有可以移動過去的資料夾','warn'); return; }
+  openModal(`
+    <h3>移動「${escapeHtml(folder.name)}」</h3>
+    <p class="sub">選擇要移動到哪個資料夾底下（無法移動到自己或自己的子資料夾裡）</p>
+    <div class="field">
+      <label>目的資料夾</label>
+      <select id="move-folder-target">
+        ${options.map(o=>`<option value="${o.id}">${escapeHtml(o.name)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="move-folder-cancel">取消</button>
+      <button class="btn" id="move-folder-save">移動</button>
+    </div>
+  `);
+  document.getElementById('move-folder-cancel').onclick = closeModal;
+  document.getElementById('move-folder-save').onclick = async ()=>{
+    const targetId = document.getElementById('move-folder-target').value;
+    folder.parentId = targetId;
+    await storageSet(kind === 'papers' ? 'papers' : 'videos', data);
+    closeModal();
+    render();
+    showToast('資料夾已移動');
+  };
 }
 
 function promptMoveFile(kind, fromFolderId, fileId){
@@ -2113,6 +2168,42 @@ function bindViewEvents(){
     });
     const renameBtn = item.querySelector('[data-action="rename-folder"]');
     if(renameBtn) renameBtn.addEventListener('click', ()=> promptRenameFolder(kind, folderId));
+    const moveFolderBtn = item.querySelector('[data-action="move-folder"]');
+    if(moveFolderBtn) moveFolderBtn.addEventListener('click', ()=> promptMoveFolder(kind, folderId));
+  });
+
+  // folder cards (subfolders shown inside a folder) — rename / move / delete
+  document.querySelectorAll('[data-action="rename-folder-card"]').forEach(btn=>{
+    btn.addEventListener('click', ()=> promptRenameFolder(btn.dataset.kind, btn.dataset.folder));
+  });
+  document.querySelectorAll('[data-action="move-folder"][data-folder]').forEach(btn=>{
+    btn.addEventListener('click', ()=> promptMoveFolder(btn.dataset.kind, btn.dataset.folder));
+  });
+  document.querySelectorAll('[data-action="delete-folder-card"]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const kind = btn.dataset.kind;
+      const folderId = btn.dataset.folder;
+      const descendantCount = getDescendantFolderIds(kind, folderId).length;
+      const msg = descendantCount
+        ? `這個資料夾裡還有 ${descendantCount} 個子資料夾，刪除後會一併刪除全部子資料夾與裡面的所有檔案，確定要刪除嗎？`
+        : '刪除資料夾將一併刪除其中所有檔案，確定要刪除嗎？';
+      confirmDialog(msg, async ()=>{
+        const idsToRemove = [folderId, ...getDescendantFolderIds(kind, folderId)];
+        if(kind === 'papers'){
+          state.papers.folders = state.papers.folders.filter(f=>!idsToRemove.includes(f.id));
+          idsToRemove.forEach(id=> delete state.papers.files[id]);
+          if(idsToRemove.includes(state.activePaperFolder)) state.activePaperFolder = ALL_ID;
+          await storageSet('papers', state.papers);
+        } else {
+          state.videos.folders = state.videos.folders.filter(f=>!idsToRemove.includes(f.id));
+          idsToRemove.forEach(id=> delete state.videos.items[id]);
+          if(idsToRemove.includes(state.activeVideoFolder)) state.activeVideoFolder = ALL_ID;
+          await storageSet('videos', state.videos);
+        }
+        render();
+        showToast('資料夾已刪除');
+      });
+    });
   });
 
   // folder overview cards (only shown on 全部試卷 / 全部影片)
