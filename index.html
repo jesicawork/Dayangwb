@@ -261,6 +261,13 @@
   }
   .folder-item.pinned.active{ box-shadow:none; background:rgba(255,255,255,.75); }
 
+  .breadcrumb{ display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin-bottom:12px; font-size:13px; }
+  .breadcrumb .crumb{ cursor:pointer; color:var(--ink-soft); padding:3px 8px; border-radius:8px; }
+  .breadcrumb .crumb:hover{ background:var(--lavender-bg); color:var(--ink); }
+  .breadcrumb .crumb.current{ color:var(--lavender-deep); font-weight:700; cursor:default; }
+  .breadcrumb .crumb.current:hover{ background:none; }
+  .breadcrumb .crumb-sep{ color:var(--ink-soft); opacity:.6; }
+
   .folder-overview{ margin-top:22px; }
   .folder-overview h4{ margin:0 0 10px; font-size:13px; letter-spacing:1px; color:var(--ink-soft); font-weight:700; }
   .folder-card-grid{ display:grid; grid-template-columns:repeat(auto-fill, minmax(150px,1fr)); gap:12px; }
@@ -808,6 +815,39 @@ function renderHome(){
 }
 
 /* ============ PAPERS ============ */
+function getChildFolders(kind, parentId){
+  const data = kind === 'papers' ? state.papers : state.videos;
+  return data.folders.filter(f => (f.parentId || ALL_ID) === parentId);
+}
+
+function getFolderPath(kind, folderId){
+  if(folderId === ALL_ID) return [];
+  const data = kind === 'papers' ? state.papers : state.videos;
+  const path = [];
+  let current = data.folders.find(f=>f.id===folderId);
+  const guard = new Set();
+  while(current && !guard.has(current.id)){
+    path.unshift(current);
+    guard.add(current.id);
+    const parentId = current.parentId || ALL_ID;
+    if(parentId === ALL_ID) break;
+    current = data.folders.find(f=>f.id===parentId);
+  }
+  return path;
+}
+
+function getDescendantFolderIds(kind, folderId){
+  const ids = [];
+  const walk = (pid)=>{
+    getChildFolders(kind, pid).forEach(child=>{
+      ids.push(child.id);
+      walk(child.id);
+    });
+  };
+  walk(folderId);
+  return ids;
+}
+
 function renderFolderList(kind){
   const data = kind === 'papers' ? state.papers : state.videos;
   const activeId = kind === 'papers' ? state.activePaperFolder : state.activeVideoFolder;
@@ -817,10 +857,11 @@ function renderFolderList(kind){
       <span class="name" data-action="select-folder">🗂️ ${allLabel}</span>
     </div>
   `;
-  if(!data.folders.length){
+  const topLevel = getChildFolders(kind, ALL_ID);
+  if(!topLevel.length){
     return pinned + `<p style="font-size:12px;color:var(--ink-soft);margin:6px 0 10px;">尚無自訂資料夾</p>`;
   }
-  return pinned + data.folders.map(f => `
+  return pinned + topLevel.map(f => `
     <div class="folder-item ${f.id === activeId ? 'active' : ''}" data-folder="${f.id}" data-kind="${kind}">
       <span class="name" data-action="select-folder">📁 ${escapeHtml(f.name)}</span>
       <button class="del" data-action="rename-folder" title="修改資料夾名稱">✏️</button>
@@ -848,21 +889,24 @@ function searchFiles(kind, query){
   return results;
 }
 
-function renderFolderOverview(kind){
-  const data = kind === 'papers' ? state.papers : state.videos;
-  const bucket = kind === 'papers' ? data.files : data.items;
-  if(!data.folders.length) return '';
+function renderFolderOverview(kind, parentId){
+  const bucket = kind === 'papers' ? state.papers.files : state.videos.items;
+  const children = getChildFolders(kind, parentId);
+  if(!children.length) return '';
   return `
     <div class="folder-overview">
-      <h4>資料夾</h4>
+      <h4>子資料夾</h4>
       <div class="folder-card-grid">
-        ${data.folders.map(f => `
+        ${children.map(f => {
+          const childCount = getChildFolders(kind, f.id).length;
+          return `
           <button class="folder-card" data-goto-folder="${f.id}" data-kind="${kind}">
             <span class="ic">📁</span>
             <span class="name">${escapeHtml(f.name)}</span>
-            <span class="count">${(bucket[f.id]||[]).length} 份</span>
+            <span class="count">${(bucket[f.id]||[]).length} 份${childCount ? '・' + childCount + ' 個子資料夾' : ''}</span>
           </button>
-        `).join('')}
+        `;
+        }).join('')}
       </div>
     </div>
   `;
@@ -875,6 +919,13 @@ function renderPapers(){
   const files = state.papers.files[activeId] || [];
   const query = state.paperSearch || '';
   const searchResults = query.trim() ? searchFiles('papers', query) : null;
+  const path = getFolderPath('papers', activeId);
+  const breadcrumb = `
+    <div class="breadcrumb">
+      <span class="crumb ${isAll?'current':''}" data-crumb="${ALL_ID}" data-kind="papers">🗂️ 全部試卷</span>
+      ${path.map((f,i)=>`<span class="crumb-sep">›</span><span class="crumb ${i===path.length-1?'current':''}" data-crumb="${f.id}" data-kind="papers">${escapeHtml(f.name)}</span>`).join('')}
+    </div>
+  `;
   return `
     <div class="topbar">
       <div><p class="eyebrow">EXAM ARCHIVE</p><h2 class="page-title">試卷專區</h2></div>
@@ -896,18 +947,20 @@ function renderPapers(){
         <button class="add-folder-btn" id="add-paper-folder">＋ 新增資料夾</button>
       </div>
       <div class="file-panel">
+        ${breadcrumb}
         <div class="file-panel-head">
           <h3>${isAll ? '全部試卷（未分類）' : escapeHtml(folder.name)}</h3>
           <div>
+            <button class="btn ghost" id="add-paper-subfolder">＋ 子資料夾</button>
             <input type="file" id="paper-file-input" multiple style="display:none">
             <button class="btn" id="paper-upload-btn">＋ 上傳試卷</button>
           </div>
         </div>
-        ${isAll ? `<p class="helper-note" style="margin-top:0;">這裡放無法歸類到特定資料夾的試卷；已建立的資料夾會列在下方，點進去可上傳、查看該資料夾內的試卷。</p>` : ''}
+        ${isAll ? `<p class="helper-note" style="margin-top:0;">這裡放無法歸類到特定資料夾的試卷；下方是已建立的資料夾與子資料夾。</p>` : ''}
+        ${renderFolderOverview('papers', activeId)}
         <div id="paper-file-list">
           ${renderFileRows(files, 'papers', activeId)}
         </div>
-        ${isAll ? renderFolderOverview('papers') : ''}
       </div>
     </div>
     `}
@@ -955,6 +1008,13 @@ function renderVideos(){
   const items = state.videos.items[activeId] || [];
   const query = state.videoSearch || '';
   const searchResults = query.trim() ? searchFiles('videos', query) : null;
+  const path = getFolderPath('videos', activeId);
+  const breadcrumb = `
+    <div class="breadcrumb">
+      <span class="crumb ${isAll?'current':''}" data-crumb="${ALL_ID}" data-kind="videos">🗂️ 全部影片</span>
+      ${path.map((f,i)=>`<span class="crumb-sep">›</span><span class="crumb ${i===path.length-1?'current':''}" data-crumb="${f.id}" data-kind="videos">${escapeHtml(f.name)}</span>`).join('')}
+    </div>
+  `;
   return `
     <div class="topbar">
       <div><p class="eyebrow">VIDEO LIBRARY</p><h2 class="page-title">課程影片</h2></div>
@@ -976,15 +1036,19 @@ function renderVideos(){
         <button class="add-folder-btn" id="add-video-folder">＋ 新增資料夾</button>
       </div>
       <div class="file-panel">
+        ${breadcrumb}
         <div class="file-panel-head">
           <h3>${isAll ? '全部影片（未分類）' : escapeHtml(folder.name)}</h3>
-          <button class="btn" id="video-add-btn">＋ 新增影片</button>
+          <div style="display:flex;gap:8px;">
+            <button class="btn ghost" id="add-video-subfolder">＋ 子資料夾</button>
+            <button class="btn" id="video-add-btn">＋ 新增影片</button>
+          </div>
         </div>
-        ${isAll ? `<p class="helper-note" style="margin-top:0;">這裡放無法歸類到特定資料夾的影片；已建立的資料夾會列在下方，點進去可新增、查看該資料夾內的影片。</p>` : ''}
+        ${isAll ? `<p class="helper-note" style="margin-top:0;">這裡放無法歸類到特定資料夾的影片；下方是已建立的資料夾與子資料夾。</p>` : ''}
+        ${renderFolderOverview('videos', activeId)}
         <div id="video-item-list">
           ${renderFileRows(items, 'videos', activeId)}
         </div>
-        ${isAll ? renderFolderOverview('videos') : ''}
       </div>
     </div>
     `}
@@ -1163,9 +1227,10 @@ function renderAttendanceGrid(){
 }
 
 /* ============ modals: folder create ============ */
-function promptCreateFolder(kind){
+function promptCreateFolder(kind, parentId){
+  const targetParent = parentId || ALL_ID;
   openModal(`
-    <h3>新增資料夾</h3>
+    <h3>${targetParent === ALL_ID ? '新增資料夾' : '新增子資料夾'}</h3>
     <p class="sub">${kind === 'papers' ? '例如：高一數學、高二理化段考卷' : '例如：高三英文補課影片'}</p>
     <div class="field"><label>資料夾名稱</label><input type="text" id="new-folder-name" placeholder="請輸入名稱" autofocus></div>
     <div class="modal-actions">
@@ -1179,12 +1244,12 @@ function promptCreateFolder(kind){
     if(!name){ showToast('請輸入資料夾名稱','warn'); return; }
     const id = genId();
     if(kind === 'papers'){
-      state.papers.folders.push({id, name});
+      state.papers.folders.push({id, name, parentId: targetParent});
       state.papers.files[id] = [];
       state.activePaperFolder = id;
       await storageSet('papers', state.papers);
     } else {
-      state.videos.folders.push({id, name});
+      state.videos.folders.push({id, name, parentId: targetParent});
       state.videos.items[id] = [];
       state.activeVideoFolder = id;
       await storageSet('videos', state.videos);
@@ -1395,7 +1460,10 @@ function promptMoveFile(kind, fromFolderId, fileId){
   const entry = (bucket[fromFolderId]||[]).find(f=>f.id===fileId);
   if(!entry) return;
   const allLabel = kind === 'papers' ? '全部試卷（未分類）' : '全部影片（未分類）';
-  const options = [{ id: ALL_ID, name: allLabel }, ...data.folders].filter(f=>f.id !== fromFolderId);
+  const options = [
+    { id: ALL_ID, name: allLabel },
+    ...data.folders.map(f => ({ id: f.id, name: getFolderPath(kind, f.id).map(p=>p.name).join(' / ') }))
+  ].filter(f=>f.id !== fromFolderId);
   if(!options.length){ showToast('沒有其他資料夾可以移動','warn'); return; }
   openModal(`
     <h3>移動「${escapeHtml(entry.name)}」</h3>
@@ -1962,7 +2030,9 @@ function bindViewEvents(){
   if(paperSearchClear) paperSearchClear.addEventListener('click', ()=>{ state.paperSearch=''; render(); });
 
   const addPaperFolderBtn = document.getElementById('add-paper-folder');
-  if(addPaperFolderBtn) addPaperFolderBtn.addEventListener('click', ()=> promptCreateFolder('papers'));
+  if(addPaperFolderBtn) addPaperFolderBtn.addEventListener('click', ()=> promptCreateFolder('papers', ALL_ID));
+  const addPaperSubfolderBtn = document.getElementById('add-paper-subfolder');
+  if(addPaperSubfolderBtn) addPaperSubfolderBtn.addEventListener('click', ()=> promptCreateFolder('papers', state.activePaperFolder));
 
   const paperUploadBtn = document.getElementById('paper-upload-btn');
   const paperFileInput = document.getElementById('paper-file-input');
@@ -1988,9 +2058,22 @@ function bindViewEvents(){
   if(videoSearchClear) videoSearchClear.addEventListener('click', ()=>{ state.videoSearch=''; render(); });
 
   const addVideoFolderBtn = document.getElementById('add-video-folder');
-  if(addVideoFolderBtn) addVideoFolderBtn.addEventListener('click', ()=> promptCreateFolder('videos'));
+  if(addVideoFolderBtn) addVideoFolderBtn.addEventListener('click', ()=> promptCreateFolder('videos', ALL_ID));
+  const addVideoSubfolderBtn = document.getElementById('add-video-subfolder');
+  if(addVideoSubfolderBtn) addVideoSubfolderBtn.addEventListener('click', ()=> promptCreateFolder('videos', state.activeVideoFolder));
   const videoAddBtn = document.getElementById('video-add-btn');
   if(videoAddBtn) videoAddBtn.addEventListener('click', openAddVideoModal);
+
+  // breadcrumb navigation
+  document.querySelectorAll('[data-crumb]').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const id = el.dataset.crumb;
+      const kind = el.dataset.kind;
+      if(kind === 'papers') state.activePaperFolder = id;
+      else state.activeVideoFolder = id;
+      render();
+    });
+  });
 
   // folder selection / deletion (papers + videos)
   document.querySelectorAll('.folder-item').forEach(item=>{
@@ -2003,18 +2086,23 @@ function bindViewEvents(){
     });
     const delBtn = item.querySelector('[data-action="delete-folder"]');
     if(delBtn) delBtn.addEventListener('click', ()=>{
-      confirmDialog('刪除資料夾將一併刪除其中所有檔案，確定要刪除嗎？', async ()=>{
+      const descendantCount = getDescendantFolderIds(kind, folderId).length;
+      const msg = descendantCount
+        ? `這個資料夾裡還有 ${descendantCount} 個子資料夾，刪除後會一併刪除全部子資料夾與裡面的所有檔案，確定要刪除嗎？`
+        : '刪除資料夾將一併刪除其中所有檔案，確定要刪除嗎？';
+      confirmDialog(msg, async ()=>{
+        const idsToRemove = [folderId, ...getDescendantFolderIds(kind, folderId)];
         if(kind === 'papers'){
-          state.papers.folders = state.papers.folders.filter(f=>f.id!==folderId);
-          delete state.papers.files[folderId];
-          if(state.activePaperFolder === folderId){
+          state.papers.folders = state.papers.folders.filter(f=>!idsToRemove.includes(f.id));
+          idsToRemove.forEach(id=> delete state.papers.files[id]);
+          if(idsToRemove.includes(state.activePaperFolder)){
             state.activePaperFolder = ALL_ID;
           }
           await storageSet('papers', state.papers);
         } else {
-          state.videos.folders = state.videos.folders.filter(f=>f.id!==folderId);
-          delete state.videos.items[folderId];
-          if(state.activeVideoFolder === folderId){
+          state.videos.folders = state.videos.folders.filter(f=>!idsToRemove.includes(f.id));
+          idsToRemove.forEach(id=> delete state.videos.items[id]);
+          if(idsToRemove.includes(state.activeVideoFolder)){
             state.activeVideoFolder = ALL_ID;
           }
           await storageSet('videos', state.videos);
