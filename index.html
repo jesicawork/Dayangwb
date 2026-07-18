@@ -484,7 +484,7 @@
     .modal-actions .btn{ flex:1; min-width:100px; }
     .file-row{ flex-wrap:wrap; }
     .file-row .meta{ flex-basis:100%; order:1; }
-    .file-row .actions{ order:2; margin-left:auto; }
+    .file-row .actions{ order:2; margin-left:auto; flex-wrap:wrap; justify-content:flex-end; }
     .file-panel-head{ flex-wrap:wrap; gap:10px; }
     .file-panel-head > div{ width:100%; display:flex; }
     .file-panel-head > div .btn{ flex:1; }
@@ -823,6 +823,7 @@ function renderFolderList(kind){
   return pinned + data.folders.map(f => `
     <div class="folder-item ${f.id === activeId ? 'active' : ''}" data-folder="${f.id}" data-kind="${kind}">
       <span class="name" data-action="select-folder">📁 ${escapeHtml(f.name)}</span>
+      <button class="del" data-action="rename-folder" title="修改資料夾名稱">✏️</button>
       <button class="del" data-action="delete-folder" title="刪除資料夾">✕</button>
     </div>
   `).join('');
@@ -918,8 +919,9 @@ function renderFileRows(files, kind, defaultFolderId){
   if(!files.length){
     return `<div class="empty-state"><span class="ic">📄</span>${defaultFolderId !== undefined ? '這個資料夾還沒有檔案。' : '沒有符合的檔案。'}</div>`;
   }
-  return files.map(f => {
+  return files.map((f, idx) => {
     const folderId = f._folderId !== undefined ? f._folderId : defaultFolderId;
+    const isSearchResult = f._folderId !== undefined;
     return `
     <div class="file-row">
       <div class="ic">${f.type && f.type.startsWith('video') ? '🎞️' : (f.linkType==='link' ? '🔗' : '📄')}</div>
@@ -928,10 +930,16 @@ function renderFileRows(files, kind, defaultFolderId){
         <div class="fsub">${f.linkType==='link' ? f.url : (f.tooLarge ? '檔案過大，僅記錄檔名・' + fmtSize(f.size) : fmtSize(f.size))} ・ ${fmtDate(f.date)}</div>
       </div>
       <div class="actions">
+        ${!isSearchResult ? `
+          <button class="btn small ghost" data-action="move-order-up" data-id="${f.id}" data-kind="${kind}" data-folder="${folderId}" title="上移" ${idx===0 ? 'disabled' : ''}>▲</button>
+          <button class="btn small ghost" data-action="move-order-down" data-id="${f.id}" data-kind="${kind}" data-folder="${folderId}" title="下移" ${idx===files.length-1 ? 'disabled' : ''}>▼</button>
+        ` : ''}
         ${f.linkType==='link'
           ? `<a class="btn small secondary" href="${escapeHtml(f.url)}" target="_blank" rel="noopener">開啟連結</a>`
           : `<button class="btn small secondary" data-action="download" data-id="${f.id}" data-kind="${kind}" data-folder="${folderId}" ${f.tooLarge ? 'disabled' : ''}>下載</button>`
         }
+        <button class="btn small ghost" data-action="rename-file" data-id="${f.id}" data-kind="${kind}" data-folder="${folderId}" title="修改名稱">✏️</button>
+        ${kind !== 'attendance' ? `<button class="btn small ghost" data-action="move-file" data-id="${f.id}" data-kind="${kind}" data-folder="${folderId}" title="移動到其他資料夾">📂</button>` : ''}
         <button class="btn small ghost" data-action="delete-file" data-id="${f.id}" data-kind="${kind}" data-folder="${folderId}">刪除</button>
       </div>
     </div>
@@ -1306,6 +1314,114 @@ function resolveFolderName(kind, folderId){
   const data = kind === 'papers' ? state.papers : state.videos;
   const f = data.folders.find(x => x.id === folderId);
   return f ? f.name : null;
+}
+
+/* ============ folder rename / file rename & move ============ */
+function promptRenameFolder(kind, folderId){
+  const data = kind === 'papers' ? state.papers : state.videos;
+  const folder = data.folders.find(f=>f.id===folderId);
+  if(!folder) return;
+  openModal(`
+    <h3>修改資料夾名稱</h3>
+    <div class="field"><label>資料夾名稱</label><input type="text" id="rename-folder-input" value="${escapeHtml(folder.name)}" autofocus></div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="rename-folder-cancel">取消</button>
+      <button class="btn" id="rename-folder-save">儲存</button>
+    </div>
+  `);
+  document.getElementById('rename-folder-cancel').onclick = closeModal;
+  document.getElementById('rename-folder-save').onclick = async ()=>{
+    const newName = document.getElementById('rename-folder-input').value.trim();
+    if(!newName){ showToast('請輸入資料夾名稱','warn'); return; }
+    folder.name = newName;
+    await storageSet(kind === 'papers' ? 'papers' : 'videos', data);
+    closeModal();
+    render();
+    showToast('資料夾名稱已更新');
+  };
+}
+
+function promptRenameFile(kind, folderId, fileId){
+  const bucket = kind === 'papers' ? state.papers.files : kind === 'videos' ? state.videos.items : null;
+  const entry = kind === 'attendance'
+    ? state.attendanceFiles.find(f=>f.id===fileId)
+    : (bucket[folderId]||[]).find(f=>f.id===fileId);
+  if(!entry) return;
+  const isLink = entry.linkType === 'link';
+  openModal(`
+    <h3>修改${isLink ? '連結' : '檔案'}名稱</h3>
+    <div class="field"><label>名稱</label><input type="text" id="rename-file-input" value="${escapeHtml(entry.name)}" autofocus></div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="rename-file-cancel">取消</button>
+      <button class="btn" id="rename-file-save">儲存</button>
+    </div>
+  `);
+  document.getElementById('rename-file-cancel').onclick = closeModal;
+  document.getElementById('rename-file-save').onclick = async ()=>{
+    const newName = document.getElementById('rename-file-input').value.trim();
+    if(!newName){ showToast('請輸入名稱','warn'); return; }
+    entry.name = newName;
+    if(kind === 'papers') await storageSet('papers', state.papers);
+    else if(kind === 'videos') await storageSet('videos', state.videos);
+    else await storageSet('attendance-files', state.attendanceFiles);
+    closeModal();
+    render();
+    showToast('名稱已更新');
+  };
+}
+
+async function moveFileOrder(kind, folderId, fileId, direction){
+  let arr;
+  if(kind === 'attendance'){
+    arr = state.attendanceFiles;
+  } else {
+    const bucket = kind === 'papers' ? state.papers.files : state.videos.items;
+    arr = bucket[folderId];
+  }
+  if(!arr) return;
+  const idx = arr.findIndex(f=>f.id===fileId);
+  const newIdx = idx + direction;
+  if(idx < 0 || newIdx < 0 || newIdx >= arr.length) return;
+  [arr[idx], arr[newIdx]] = [arr[newIdx], arr[idx]];
+  if(kind === 'papers') await storageSet('papers', state.papers);
+  else if(kind === 'videos') await storageSet('videos', state.videos);
+  else await storageSet('attendance-files', state.attendanceFiles);
+  render();
+}
+
+function promptMoveFile(kind, fromFolderId, fileId){
+  const data = kind === 'papers' ? state.papers : state.videos;
+  const bucket = kind === 'papers' ? state.papers.files : state.videos.items;
+  const entry = (bucket[fromFolderId]||[]).find(f=>f.id===fileId);
+  if(!entry) return;
+  const allLabel = kind === 'papers' ? '全部試卷（未分類）' : '全部影片（未分類）';
+  const options = [{ id: ALL_ID, name: allLabel }, ...data.folders].filter(f=>f.id !== fromFolderId);
+  if(!options.length){ showToast('沒有其他資料夾可以移動','warn'); return; }
+  openModal(`
+    <h3>移動「${escapeHtml(entry.name)}」</h3>
+    <p class="sub">選擇要移動到的資料夾</p>
+    <div class="field">
+      <label>目的資料夾</label>
+      <select id="move-file-target">
+        ${options.map(f=>`<option value="${f.id}">${escapeHtml(f.name)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="move-file-cancel">取消</button>
+      <button class="btn" id="move-file-save">移動</button>
+    </div>
+  `);
+  document.getElementById('move-file-cancel').onclick = closeModal;
+  document.getElementById('move-file-save').onclick = async ()=>{
+    const targetId = document.getElementById('move-file-target').value;
+    bucket[fromFolderId] = (bucket[fromFolderId]||[]).filter(f=>f.id!==fileId);
+    if(!bucket[targetId]) bucket[targetId] = [];
+    bucket[targetId].push(entry);
+    await storageSet(kind === 'papers' ? 'papers' : 'videos', data);
+    closeModal();
+    render();
+    showToast('已移動');
+  };
 }
 
 async function downloadFile(entry){
@@ -1907,6 +2023,8 @@ function bindViewEvents(){
         showToast('資料夾已刪除');
       });
     });
+    const renameBtn = item.querySelector('[data-action="rename-folder"]');
+    if(renameBtn) renameBtn.addEventListener('click', ()=> promptRenameFolder(kind, folderId));
   });
 
   // folder overview cards (only shown on 全部試卷 / 全部影片)
@@ -1931,6 +2049,22 @@ function bindViewEvents(){
       else if(kind === 'videos') entry = (state.videos.items[folderId]||[]).find(f=>f.id===id);
       else entry = state.attendanceFiles.find(f=>f.id===id);
       if(entry) downloadFile(entry);
+    });
+  });
+  document.querySelectorAll('[data-action="move-order-up"]').forEach(btn=>{
+    btn.addEventListener('click', ()=> moveFileOrder(btn.dataset.kind, btn.dataset.folder, btn.dataset.id, -1));
+  });
+  document.querySelectorAll('[data-action="move-order-down"]').forEach(btn=>{
+    btn.addEventListener('click', ()=> moveFileOrder(btn.dataset.kind, btn.dataset.folder, btn.dataset.id, 1));
+  });
+  document.querySelectorAll('[data-action="rename-file"]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      promptRenameFile(btn.dataset.kind, btn.dataset.folder, btn.dataset.id);
+    });
+  });
+  document.querySelectorAll('[data-action="move-file"]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      promptMoveFile(btn.dataset.kind, btn.dataset.folder, btn.dataset.id);
     });
   });
   document.querySelectorAll('[data-action="delete-file"]').forEach(btn=>{
