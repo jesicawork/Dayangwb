@@ -1571,18 +1571,18 @@ async function addFileToStore(kind, folderIdOrNull, file){
  * 單一儲存格 50,000 字的上限而寫入失敗。
  */
 async function savePapers(){
-  await storageSet('papers-folders', state.papers.folders);
   const ids = Object.keys(state.papers.files);
-  for(const id of ids){
-    await storageSet(`papers-files__${id}`, state.papers.files[id] || []);
-  }
+  await Promise.all([
+    storageSet('papers-folders', state.papers.folders),
+    ...ids.map(id => storageSet(`papers-files__${id}`, state.papers.files[id] || []))
+  ]);
 }
 async function saveVideos(){
-  await storageSet('videos-folders', state.videos.folders);
   const ids = Object.keys(state.videos.items);
-  for(const id of ids){
-    await storageSet(`videos-items__${id}`, state.videos.items[id] || []);
-  }
+  await Promise.all([
+    storageSet('videos-folders', state.videos.folders),
+    ...ids.map(id => storageSet(`videos-items__${id}`, state.videos.items[id] || []))
+  ]);
 }
 async function deletePapersFolderKey(folderId){
   await storageDelete(`papers-files__${folderId}`);
@@ -2980,10 +2980,30 @@ function bindViewEvents(){
 }
 
 /* ============ init ============ */
+function withTimeout(promise, ms){
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(()=> reject(new Error('LOAD_TIMEOUT')), ms))
+  ]);
+}
+
 (async function init(){
   render(); // loading state
-  await loadAll();
-  render();
+  try{
+    await withTimeout(loadAll(), 30000);
+    render();
+  }catch(e){
+    const c = document.getElementById('content');
+    c.innerHTML = `
+      <div class="empty-state">
+        <span class="ic">⚠️</span>
+        資料載入時間過長或發生錯誤（${e.message === 'LOAD_TIMEOUT' ? '超過 30 秒沒有回應' : escapeHtml(String(e.message||e))}）。<br>
+        可能是網路不穩或雲端後端回應較慢，請按下方按鈕重試；如果一直失敗，請確認「⚙️ 同步設定」裡的網址是否正確。
+        <div style="margin-top:16px;"><button class="btn" id="retry-load-btn">🔄 重新載入</button></div>
+      </div>
+    `;
+    document.getElementById('retry-load-btn').addEventListener('click', ()=>{ location.reload(); });
+  }
 })();
 </script>
 </body>
