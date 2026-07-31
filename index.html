@@ -1436,12 +1436,12 @@ function promptCreateFolder(kind, parentId){
       state.papers.folders.push({id, name, parentId: targetParent});
       state.papers.files[id] = [];
       state.activePaperFolder = id;
-      await savePapers();
+      await savePapers([id]);
     } else {
       state.videos.folders.push({id, name, parentId: targetParent});
       state.videos.items[id] = [];
       state.activeVideoFolder = id;
-      await saveVideos();
+      await saveVideos([id]);
     }
     closeModal();
     render();
@@ -1486,7 +1486,7 @@ function openAddVideoModal(){
       const url = document.getElementById('video-link-url').value.trim();
       if(!name || !url){ showToast('請填寫名稱與連結','warn'); return; }
       state.videos.items[folderId].push({ id: genId(), name, linkType:'link', url, date: new Date().toISOString() });
-      await saveVideos();
+      await saveVideos([folderId]);
       closeModal(); render(); showToast('影片連結已新增');
     } else {
       const input = document.getElementById('video-file-input');
@@ -1545,10 +1545,10 @@ async function addFileToStore(kind, folderIdOrNull, file){
 
   if(kind === 'papers'){
     state.papers.files[folderIdOrNull].push(entry);
-    await savePapers();
+    await savePapers([folderIdOrNull]);
   } else if(kind === 'videos'){
     state.videos.items[folderIdOrNull].push(entry);
-    await saveVideos();
+    await saveVideos([folderIdOrNull]);
   } else if(kind === 'attendance'){
     state.attendanceFiles.push(entry);
     await storageSet('attendance-files', state.attendanceFiles);
@@ -1567,15 +1567,15 @@ async function addFileToStore(kind, folderIdOrNull, file){
  * 避免全部資料夾的檔案通通塞進同一個儲存格，導致超過 Google 試算表
  * 單一儲存格 50,000 字的上限而寫入失敗。
  */
-async function savePapers(){
-  const ids = Object.keys(state.papers.files);
+async function savePapers(affectedFolderIds){
+  const ids = affectedFolderIds !== undefined ? affectedFolderIds : Object.keys(state.papers.files);
   await Promise.all([
     storageSet('papers-folders', state.papers.folders),
     ...ids.map(id => storageSet(`papers-files__${id}`, state.papers.files[id] || []))
   ]);
 }
-async function saveVideos(){
-  const ids = Object.keys(state.videos.items);
+async function saveVideos(affectedFolderIds){
+  const ids = affectedFolderIds !== undefined ? affectedFolderIds : Object.keys(state.videos.items);
   await Promise.all([
     storageSet('videos-folders', state.videos.folders),
     ...ids.map(id => storageSet(`videos-items__${id}`, state.videos.items[id] || []))
@@ -1614,7 +1614,8 @@ function promptRenameFolder(kind, folderId){
     const newName = document.getElementById('rename-folder-input').value.trim();
     if(!newName){ showToast('請輸入資料夾名稱','warn'); return; }
     folder.name = newName;
-    await storageSet(kind === 'papers' ? 'papers' : 'videos', data);
+    if(kind === 'papers') await savePapers([]);
+    else await saveVideos([]);
     closeModal();
     render();
     showToast('資料夾名稱已更新');
@@ -1641,8 +1642,8 @@ function promptRenameFile(kind, folderId, fileId){
     const newName = document.getElementById('rename-file-input').value.trim();
     if(!newName){ showToast('請輸入名稱','warn'); return; }
     entry.name = newName;
-    if(kind === 'papers') await savePapers();
-    else if(kind === 'videos') await saveVideos();
+    if(kind === 'papers') await savePapers([folderId]);
+    else if(kind === 'videos') await saveVideos([folderId]);
     else await storageSet('attendance-files', state.attendanceFiles);
     closeModal();
     render();
@@ -1663,8 +1664,8 @@ async function moveFileOrder(kind, folderId, fileId, direction){
   const newIdx = idx + direction;
   if(idx < 0 || newIdx < 0 || newIdx >= arr.length) return;
   [arr[idx], arr[newIdx]] = [arr[newIdx], arr[idx]];
-  if(kind === 'papers') await savePapers();
-  else if(kind === 'videos') await saveVideos();
+  if(kind === 'papers') await savePapers([folderId]);
+  else if(kind === 'videos') await saveVideos([folderId]);
   else await storageSet('attendance-files', state.attendanceFiles);
   render();
 }
@@ -1699,7 +1700,8 @@ function promptMoveFolder(kind, folderId){
   document.getElementById('move-folder-save').onclick = async ()=>{
     const targetId = document.getElementById('move-folder-target').value;
     folder.parentId = targetId;
-    await storageSet(kind === 'papers' ? 'papers' : 'videos', data);
+    if(kind === 'papers') await savePapers([]);
+    else await saveVideos([]);
     closeModal();
     render();
     showToast('資料夾已移動');
@@ -1737,7 +1739,8 @@ function promptMoveFile(kind, fromFolderId, fileId){
     bucket[fromFolderId] = (bucket[fromFolderId]||[]).filter(f=>f.id!==fileId);
     if(!bucket[targetId]) bucket[targetId] = [];
     bucket[targetId].push(entry);
-    await storageSet(kind === 'papers' ? 'papers' : 'videos', data);
+    if(kind === 'papers') await savePapers([fromFolderId, targetId]);
+    else await saveVideos([fromFolderId, targetId]);
     closeModal();
     render();
     showToast('已移動');
@@ -2670,7 +2673,7 @@ function bindViewEvents(){
           if(idsToRemove.includes(state.activePaperFolder)){
             state.activePaperFolder = ALL_ID;
           }
-          await savePapers();
+          await savePapers([]);
           await Promise.all(idsToRemove.map(id=>deletePapersFolderKey(id)));
         } else {
           state.videos.folders = state.videos.folders.filter(f=>!idsToRemove.includes(f.id));
@@ -2678,7 +2681,7 @@ function bindViewEvents(){
           if(idsToRemove.includes(state.activeVideoFolder)){
             state.activeVideoFolder = ALL_ID;
           }
-          await saveVideos();
+          await saveVideos([]);
           await Promise.all(idsToRemove.map(id=>deleteVideosFolderKey(id)));
         }
         render();
@@ -2712,13 +2715,13 @@ function bindViewEvents(){
           state.papers.folders = state.papers.folders.filter(f=>!idsToRemove.includes(f.id));
           idsToRemove.forEach(id=> delete state.papers.files[id]);
           if(idsToRemove.includes(state.activePaperFolder)) state.activePaperFolder = ALL_ID;
-          await savePapers();
+          await savePapers([]);
           await Promise.all(idsToRemove.map(id=>deletePapersFolderKey(id)));
         } else {
           state.videos.folders = state.videos.folders.filter(f=>!idsToRemove.includes(f.id));
           idsToRemove.forEach(id=> delete state.videos.items[id]);
           if(idsToRemove.includes(state.activeVideoFolder)) state.activeVideoFolder = ALL_ID;
-          await saveVideos();
+          await saveVideos([]);
           await Promise.all(idsToRemove.map(id=>deleteVideosFolderKey(id)));
         }
         render();
@@ -2777,11 +2780,11 @@ function bindViewEvents(){
         if(kind === 'papers'){
           entry = (state.papers.files[folderId]||[]).find(f=>f.id===id);
           state.papers.files[folderId] = (state.papers.files[folderId]||[]).filter(f=>f.id!==id);
-          await savePapers();
+          await savePapers([folderId]);
         } else if(kind === 'videos'){
           entry = (state.videos.items[folderId]||[]).find(f=>f.id===id);
           state.videos.items[folderId] = (state.videos.items[folderId]||[]).filter(f=>f.id!==id);
-          await saveVideos();
+          await saveVideos([folderId]);
         } else {
           entry = state.attendanceFiles.find(f=>f.id===id);
           state.attendanceFiles = state.attendanceFiles.filter(f=>f.id!==id);
