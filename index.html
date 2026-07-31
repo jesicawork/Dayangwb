@@ -611,12 +611,21 @@ async function storageGet(key, fallback){
 async function storageSet(key, value){
   if(Backend.gasUrl && Backend.cloudReady){
     Backend.cache[key] = value;
+    const payloadStr = JSON.stringify(value);
+    if(payloadStr.length > 45000){
+      showToast(`「${key}」這筆資料長度約 ${payloadStr.length} 字元，接近 Google 試算表單一儲存格 50,000 字的上限，建議聯絡技術人員處理，避免存不進去`, 'warn');
+    }
     try{
-      await fetch(Backend.gasUrl, {
+      const res = await fetch(Backend.gasUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({ action:'set', key, value })
       });
+      const json = await res.json();
+      if(!json || !json.ok){
+        showToast(`儲存「${key}」失敗：${(json && json.error) || '未知錯誤'}`, 'warn');
+        return false;
+      }
       return true;
     }catch(e){
       showToast('同步到雲端失敗，請檢查網路連線','warn');
@@ -630,6 +639,35 @@ async function storageSet(key, value){
     showToast('本機儲存空間已滿，建議清理部分資料或改用雲端同步','warn');
     return false;
   }
+}
+
+async function storageDelete(key){
+  if(Backend.gasUrl && Backend.cloudReady){
+    delete Backend.cache[key];
+    try{
+      await fetch(Backend.gasUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ action:'deleteKey', key })
+      });
+    }catch(e){ /* 刪除殘留資料失敗不影響主要操作，忽略即可 */ }
+    return;
+  }
+  try{ localStorage.removeItem(LOCAL_PREFIX + key); }catch(e){}
+}
+
+function listStoredKeysWithPrefix(prefix){
+  if(Backend.gasUrl && Backend.cloudReady){
+    return Object.keys(Backend.cache).filter(k => k.startsWith(prefix));
+  }
+  const out = [];
+  for(let i=0;i<localStorage.length;i++){
+    const fullKey = localStorage.key(i);
+    if(fullKey && fullKey.startsWith(LOCAL_PREFIX + prefix)){
+      out.push(fullKey.slice(LOCAL_PREFIX.length));
+    }
+  }
+  return out;
 }
 
 /**
@@ -750,12 +788,47 @@ function showToast(msg, type){
   setTimeout(()=>{ el.remove(); }, 3600);
 }
 
+async function loadPapersOrVideos(kind){
+  const folderKey = kind === 'papers' ? 'papers-folders' : 'videos-folders';
+  const filePrefix = kind === 'papers' ? 'papers-files__' : 'videos-items__';
+  const legacyKey = kind === 'papers' ? 'papers' : 'videos';
+  const legacyFilesProp = kind === 'papers' ? 'files' : 'items';
+
+  const folders = await storageGet(folderKey, null);
+  if(folders !== null){
+    // 已經是新的分割格式
+    const files = {};
+    const fileKeys = listStoredKeysWithPrefix(filePrefix);
+    for(const fullKey of fileKeys){
+      const fid = fullKey.slice(filePrefix.length);
+      files[fid] = await storageGet(fullKey, []);
+    }
+    if(!files[ALL_ID]) files[ALL_ID] = [];
+    return { folders, files };
+  }
+
+  // 找不到新格式資料，嘗試從舊版「整包塞一格」的資料搬移過來（只會執行這一次）
+  const legacy = await storageGet(legacyKey, null);
+  const data = legacy
+    ? { folders: legacy.folders || [], files: legacy[legacyFilesProp] || {} }
+    : { folders: [], files: {} };
+  if(!data.files[ALL_ID]) data.files[ALL_ID] = [];
+
+  if(legacy){
+    state[kind === 'papers' ? 'papers' : 'videos'] = data;
+    if(kind === 'papers') await savePapers(); else await saveVideos();
+    await storageDelete(legacyKey);
+    showToast(`已將「${kind === 'papers' ? '試卷' : '課程影片'}」資料搬移為新的儲存格式，避免資料量過大寫入失敗`);
+  }
+  return data;
+}
+
 /* ============ load ============ */
 async function loadAll(){
   await initBackend();
   const [papers, videos, attendanceFiles, students, attendanceDates, attendanceRecords, yearSnapshots] = await Promise.all([
-    storageGet('papers', { folders: [], files: {} }),
-    storageGet('videos', { folders: [], items: {} }),
+    loadPapersOrVideos('papers'),
+    loadPapersOrVideos('videos'),
     storageGet('attendance-files', []),
     storageGet('students', []),
     storageGet('attendance-dates', []),
@@ -1366,12 +1439,12 @@ function promptCreateFolder(kind, parentId){
       state.papers.folders.push({id, name, parentId: targetParent});
       state.papers.files[id] = [];
       state.activePaperFolder = id;
-      await storageSet('papers', state.papers);
+      await savePapers();
     } else {
       state.videos.folders.push({id, name, parentId: targetParent});
       state.videos.items[id] = [];
       state.activeVideoFolder = id;
-      await storageSet('videos', state.videos);
+      await saveVideos();
     }
     closeModal();
     render();
@@ -1416,7 +1489,7 @@ function openAddVideoModal(){
       const url = document.getElementById('video-link-url').value.trim();
       if(!name || !url){ showToast('請填寫名稱與連結','warn'); return; }
       state.videos.items[folderId].push({ id: genId(), name, linkType:'link', url, date: new Date().toISOString() });
-      await storageSet('videos', state.videos);
+      await saveVideos();
       closeModal(); render(); showToast('影片連結已新增');
     } else {
       const input = document.getElementById('video-file-input');
@@ -1475,10 +1548,10 @@ async function addFileToStore(kind, folderIdOrNull, file){
 
   if(kind === 'papers'){
     state.papers.files[folderIdOrNull].push(entry);
-    await storageSet('papers', state.papers);
+    await savePapers();
   } else if(kind === 'videos'){
     state.videos.items[folderIdOrNull].push(entry);
-    await storageSet('videos', state.videos);
+    await saveVideos();
   } else if(kind === 'attendance'){
     state.attendanceFiles.push(entry);
     await storageSet('attendance-files', state.attendanceFiles);
@@ -1490,6 +1563,32 @@ async function addFileToStore(kind, folderIdOrNull, file){
     showToast(`「${file.name}」已上傳${entry.driveFileId ? '並同步到雲端硬碟' : ''}`);
   }
   render();
+}
+
+/**
+ * 試卷／影片資料改為「資料夾清單」＋「每個資料夾各自一筆檔案清單」分開儲存，
+ * 避免全部資料夾的檔案通通塞進同一個儲存格，導致超過 Google 試算表
+ * 單一儲存格 50,000 字的上限而寫入失敗。
+ */
+async function savePapers(){
+  await storageSet('papers-folders', state.papers.folders);
+  const ids = Object.keys(state.papers.files);
+  for(const id of ids){
+    await storageSet(`papers-files__${id}`, state.papers.files[id] || []);
+  }
+}
+async function saveVideos(){
+  await storageSet('videos-folders', state.videos.folders);
+  const ids = Object.keys(state.videos.items);
+  for(const id of ids){
+    await storageSet(`videos-items__${id}`, state.videos.items[id] || []);
+  }
+}
+async function deletePapersFolderKey(folderId){
+  await storageDelete(`papers-files__${folderId}`);
+}
+async function deleteVideosFolderKey(folderId){
+  await storageDelete(`videos-items__${folderId}`);
 }
 
 function resolveFolderName(kind, folderId){
@@ -1545,8 +1644,8 @@ function promptRenameFile(kind, folderId, fileId){
     const newName = document.getElementById('rename-file-input').value.trim();
     if(!newName){ showToast('請輸入名稱','warn'); return; }
     entry.name = newName;
-    if(kind === 'papers') await storageSet('papers', state.papers);
-    else if(kind === 'videos') await storageSet('videos', state.videos);
+    if(kind === 'papers') await savePapers();
+    else if(kind === 'videos') await saveVideos();
     else await storageSet('attendance-files', state.attendanceFiles);
     closeModal();
     render();
@@ -1567,8 +1666,8 @@ async function moveFileOrder(kind, folderId, fileId, direction){
   const newIdx = idx + direction;
   if(idx < 0 || newIdx < 0 || newIdx >= arr.length) return;
   [arr[idx], arr[newIdx]] = [arr[newIdx], arr[idx]];
-  if(kind === 'papers') await storageSet('papers', state.papers);
-  else if(kind === 'videos') await storageSet('videos', state.videos);
+  if(kind === 'papers') await savePapers();
+  else if(kind === 'videos') await saveVideos();
   else await storageSet('attendance-files', state.attendanceFiles);
   render();
 }
@@ -2456,6 +2555,8 @@ function openSettingsModal(){
 
   document.getElementById('settings-reset').onclick = ()=>{
     confirmDialog('這將清除所有試卷、影片、點名表與學生資料，且無法復原，確定要繼續嗎？', async ()=>{
+      const oldPaperFolderIds = Object.keys(state.papers.files || {});
+      const oldVideoFolderIds = Object.keys(state.videos.items || {});
       state.papers = { folders: [], files: { [ALL_ID]: [] } };
       state.videos = { folders: [], items: { [ALL_ID]: [] } };
       state.attendanceFiles = [];
@@ -2466,13 +2567,17 @@ function openSettingsModal(){
       state.activePaperFolder = ALL_ID;
       state.activeVideoFolder = ALL_ID;
       await Promise.all([
-        storageSet('papers', state.papers),
-        storageSet('videos', state.videos),
+        savePapers(),
+        saveVideos(),
         storageSet('attendance-files', state.attendanceFiles),
         storageSet('students', state.students),
         storageSet('attendance-dates', state.attendanceDates),
         storageSet('attendance-records', state.attendanceRecords),
-        storageSet('year-snapshots', state.yearSnapshots)
+        storageSet('year-snapshots', state.yearSnapshots),
+        storageDelete('papers'),
+        storageDelete('videos'),
+        ...oldPaperFolderIds.filter(id=>id!==ALL_ID).map(id=>deletePapersFolderKey(id)),
+        ...oldVideoFolderIds.filter(id=>id!==ALL_ID).map(id=>deleteVideosFolderKey(id))
       ]);
       closeModal();
       render();
@@ -2568,14 +2673,16 @@ function bindViewEvents(){
           if(idsToRemove.includes(state.activePaperFolder)){
             state.activePaperFolder = ALL_ID;
           }
-          await storageSet('papers', state.papers);
+          await savePapers();
+          await Promise.all(idsToRemove.map(id=>deletePapersFolderKey(id)));
         } else {
           state.videos.folders = state.videos.folders.filter(f=>!idsToRemove.includes(f.id));
           idsToRemove.forEach(id=> delete state.videos.items[id]);
           if(idsToRemove.includes(state.activeVideoFolder)){
             state.activeVideoFolder = ALL_ID;
           }
-          await storageSet('videos', state.videos);
+          await saveVideos();
+          await Promise.all(idsToRemove.map(id=>deleteVideosFolderKey(id)));
         }
         render();
         showToast('資料夾已刪除');
@@ -2608,12 +2715,14 @@ function bindViewEvents(){
           state.papers.folders = state.papers.folders.filter(f=>!idsToRemove.includes(f.id));
           idsToRemove.forEach(id=> delete state.papers.files[id]);
           if(idsToRemove.includes(state.activePaperFolder)) state.activePaperFolder = ALL_ID;
-          await storageSet('papers', state.papers);
+          await savePapers();
+          await Promise.all(idsToRemove.map(id=>deletePapersFolderKey(id)));
         } else {
           state.videos.folders = state.videos.folders.filter(f=>!idsToRemove.includes(f.id));
           idsToRemove.forEach(id=> delete state.videos.items[id]);
           if(idsToRemove.includes(state.activeVideoFolder)) state.activeVideoFolder = ALL_ID;
-          await storageSet('videos', state.videos);
+          await saveVideos();
+          await Promise.all(idsToRemove.map(id=>deleteVideosFolderKey(id)));
         }
         render();
         showToast('資料夾已刪除');
@@ -2671,11 +2780,11 @@ function bindViewEvents(){
         if(kind === 'papers'){
           entry = (state.papers.files[folderId]||[]).find(f=>f.id===id);
           state.papers.files[folderId] = (state.papers.files[folderId]||[]).filter(f=>f.id!==id);
-          await storageSet('papers', state.papers);
+          await savePapers();
         } else if(kind === 'videos'){
           entry = (state.videos.items[folderId]||[]).find(f=>f.id===id);
           state.videos.items[folderId] = (state.videos.items[folderId]||[]).filter(f=>f.id!==id);
-          await storageSet('videos', state.videos);
+          await saveVideos();
         } else {
           entry = state.attendanceFiles.find(f=>f.id===id);
           state.attendanceFiles = state.attendanceFiles.filter(f=>f.id!==id);
