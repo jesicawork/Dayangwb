@@ -794,33 +794,30 @@ async function loadPapersOrVideos(kind){
   const legacyKey = kind === 'papers' ? 'papers' : 'videos';
   const bucketProp = kind === 'papers' ? 'files' : 'items'; // state.papers 用 files，state.videos 用 items
 
-  const folders = await storageGet(folderKey, null);
-  if(folders !== null){
-    // 已經是新的分割格式
-    const bucket = {};
-    const fileKeys = listStoredKeysWithPrefix(filePrefix);
-    for(const fullKey of fileKeys){
-      const fid = fullKey.slice(filePrefix.length);
-      bucket[fid] = await storageGet(fullKey, []);
-    }
-    if(!bucket[ALL_ID]) bucket[ALL_ID] = [];
-    return { folders, [bucketProp]: bucket };
-  }
-
-  // 找不到新格式資料，嘗試從舊版「整包塞一格」的資料搬移過來（只會執行這一次）
+  // 只要舊版「整包塞一格」的資料還留著，一律視為權威來源，重新完整搬移一次
+  // （就算之前已經有部分新格式的殘留資料，也會被這次的搬移結果覆蓋蓋掉，
+  //  避免半途中斷的搬移讓資料看起來像不見了）
   const legacy = await storageGet(legacyKey, null);
-  const data = legacy
-    ? { folders: legacy.folders || [], [bucketProp]: legacy[bucketProp] || {} }
-    : { folders: [], [bucketProp]: {} };
-  if(!data[bucketProp][ALL_ID]) data[bucketProp][ALL_ID] = [];
-
   if(legacy){
+    const data = { folders: legacy.folders || [], [bucketProp]: legacy[bucketProp] || {} };
+    if(!data[bucketProp][ALL_ID]) data[bucketProp][ALL_ID] = [];
     state[kind === 'papers' ? 'papers' : 'videos'] = data;
     if(kind === 'papers') await savePapers(); else await saveVideos();
     await storageDelete(legacyKey);
     showToast(`已將「${kind === 'papers' ? '試卷' : '課程影片'}」資料搬移為新的儲存格式，避免資料量過大寫入失敗`);
+    return data;
   }
-  return data;
+
+  // 舊資料已經確認搬完了，從新的分割格式讀取
+  const folders = await storageGet(folderKey, []);
+  const bucket = {};
+  const fileKeys = listStoredKeysWithPrefix(filePrefix);
+  for(const fullKey of fileKeys){
+    const fid = fullKey.slice(filePrefix.length);
+    bucket[fid] = await storageGet(fullKey, []);
+  }
+  if(!bucket[ALL_ID]) bucket[ALL_ID] = [];
+  return { folders, [bucketProp]: bucket };
 }
 
 /* ============ load ============ */
