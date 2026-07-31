@@ -792,27 +792,27 @@ async function loadPapersOrVideos(kind){
   const folderKey = kind === 'papers' ? 'papers-folders' : 'videos-folders';
   const filePrefix = kind === 'papers' ? 'papers-files__' : 'videos-items__';
   const legacyKey = kind === 'papers' ? 'papers' : 'videos';
-  const legacyFilesProp = kind === 'papers' ? 'files' : 'items';
+  const bucketProp = kind === 'papers' ? 'files' : 'items'; // state.papers 用 files，state.videos 用 items
 
   const folders = await storageGet(folderKey, null);
   if(folders !== null){
     // 已經是新的分割格式
-    const files = {};
+    const bucket = {};
     const fileKeys = listStoredKeysWithPrefix(filePrefix);
     for(const fullKey of fileKeys){
       const fid = fullKey.slice(filePrefix.length);
-      files[fid] = await storageGet(fullKey, []);
+      bucket[fid] = await storageGet(fullKey, []);
     }
-    if(!files[ALL_ID]) files[ALL_ID] = [];
-    return { folders, files };
+    if(!bucket[ALL_ID]) bucket[ALL_ID] = [];
+    return { folders, [bucketProp]: bucket };
   }
 
   // 找不到新格式資料，嘗試從舊版「整包塞一格」的資料搬移過來（只會執行這一次）
   const legacy = await storageGet(legacyKey, null);
   const data = legacy
-    ? { folders: legacy.folders || [], files: legacy[legacyFilesProp] || {} }
-    : { folders: [], files: {} };
-  if(!data.files[ALL_ID]) data.files[ALL_ID] = [];
+    ? { folders: legacy.folders || [], [bucketProp]: legacy[bucketProp] || {} }
+    : { folders: [], [bucketProp]: {} };
+  if(!data[bucketProp][ALL_ID]) data[bucketProp][ALL_ID] = [];
 
   if(legacy){
     state[kind === 'papers' ? 'papers' : 'videos'] = data;
